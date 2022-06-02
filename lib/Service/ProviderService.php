@@ -440,7 +440,7 @@ class ProviderService
         // if (strlen($uid) > 64 || !preg_match('#^[a-z0-9_.@-]+$#i', $profileId)) {
         //     $uid = $provider.'-'.md5($profileId);
         // }
-        return $this->login($profile->username, $profile, '');
+        return $this->login($profile->identifier, $profile, '');
     }
 
     private function login($uid, Profile $profile, $newGroupPrefix = '')

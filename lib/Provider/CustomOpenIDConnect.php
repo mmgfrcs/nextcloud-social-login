@@ -34,11 +34,10 @@ class CustomOpenIDConnect extends CustomOAuth2
         $displayNameClaim = $this->config->get('displayname_claim');
 
         $userProfile = new User\Profile();
-        $userProfile->identifier  = $data->get('sub');
+        $userProfile->identifier  = $data->get('preferred_username');
         $userProfile->displayName = $data->get($displayNameClaim) ?: $data->get('name') ?: $data->get('preferred_username');
         $userProfile->photoURL    = $data->get('picture');
         $userProfile->email       = $data->get('email');
-        $userProfile->username    = $data->get('preferred_username');
         if (!is_string($userProfile->photoURL)) {
             $userProfile->photoURL = null;
         }
