@@ -7,6 +7,8 @@ use Hybridauth\User\Profile;
 use Hybridauth\HttpClient\Curl;
 use OC\Authentication\Token\IProvider;
 use OC\User\LoginException;
+use OCA\SocialLogin\AlternativeLogin;
+use OCA\SocialLogin\AlternativeLogin\SocialLogin;
 use OCA\SocialLogin\Provider\CustomDiscourse;
 use OCA\SocialLogin\Provider\CustomOAuth1;
 use OCA\SocialLogin\Provider\CustomOAuth2;
@@ -14,7 +16,6 @@ use OCA\SocialLogin\Provider\CustomOpenIDConnect;
 use OCA\SocialLogin\Db\ConnectedLoginMapper;
 use OCP\Accounts\IAccountManager;
 use OCP\AppFramework\Http\RedirectResponse;
-use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IAvatarManager;
 use OCP\IConfig;
 use OCP\IGroupManager;
@@ -25,8 +26,6 @@ use OCP\IURLGenerator;
 use OCP\IUserSession;
 use OCP\IUserManager;
 use OCP\Mail\IMailer;
-use OCP\Security\CSP\AddContentSecurityPolicyEvent;
-use OCP\Util;
 
 class ProviderService
 {
@@ -42,6 +41,7 @@ class ProviderService
         'restrict_users_wo_assigned_groups',
         'disable_notify_admins',
         'hide_default_login',
+        'button_text_wo_prefix',
     ];
     const DEFAULT_PROVIDERS = [
         'google',
@@ -56,6 +56,7 @@ class ProviderService
         'mailru',
         'yandex',
         'BitBucket',
+        'PlexTv',
     ];
 
     const TYPE_OPENID = 'openid';
@@ -168,8 +169,6 @@ class ProviderService
     private $socialConnect;
     /** @var IAccountManager */
     private $accountManager;
-    /** @var IEventDispatcher */
-    private $dispatcher;
     /** @var IProvider */
     private $tokenProvider;
 
@@ -189,7 +188,6 @@ class ProviderService
         IMailer $mailer,
         ConnectedLoginMapper $socialConnect,
         IAccountManager $accountManager,
-        IEventDispatcher $dispatcher,
         IProvider $tokenProvider
     ) {
         $this->appName = $appName;
@@ -206,36 +204,28 @@ class ProviderService
         $this->mailer = $mailer;
         $this->socialConnect = $socialConnect;
         $this->accountManager = $accountManager;
-        $this->dispatcher = $dispatcher;
         $this->tokenProvider = $tokenProvider;
     }
 
-    public function getAuthUrl($name, $appId)
+    public function getLoginClass($name, $provider = [], $type = null)
     {
         $redirectUrl = $this->request->getParam('redirect_url');
-        $authUrl = $this->urlGenerator->linkToRouteAbsolute($this->appName.'.login.oauth', [
+        $routeName =  $this->appName.'.login.'.($type ? 'custom' : 'oauth');
+        $authUrl = $this->urlGenerator->linkToRouteAbsolute($routeName, [
+            'type' => $type,
             'provider' => $name,
             'login_redirect_url' => $redirectUrl
         ]);
-        switch ($name) {
-            case 'telegram':
-                $this->dispatcher->addListener(AddContentSecurityPolicyEvent::class, function ($event) {
-                    $csp = new \OCP\AppFramework\Http\ContentSecurityPolicy();
-                    $csp->addAllowedScriptDomain('telegram.org')
-                        ->addAllowedFrameDomain('oauth.telegram.org')
-                    ;
-                    $event->addPolicy($csp);
-                });
-                Util::addHeader('meta', [
-                    'id' => 'tg-data',
-                    'data-login' => $appId,
-                    'data-redirect-url' => $authUrl,
-                ]);
-                Util::addScript($this->appName, 'telegram');
-                return false;
+        $className = sprintf('%s\%sLogin', AlternativeLogin::class, ucfirst($name));
+        $class = class_exists($className) ? $className : SocialLogin::class;
+        if (method_exists($class, 'addLogin')) {
+            $title = $provider['title'] ?? ucfirst($name);
+            $label = $this->config->getAppValue($this->appName, 'button_text_wo_prefix')
+                ? $title
+                : $this->l->t('Log in with %s', $title);
+            $class::addLogin($label, $authUrl, $provider['style'] ?? '');
         }
-
-        return $authUrl;
+        return $class;
     }
 
     public function handleDefault($provider)
@@ -512,7 +502,7 @@ class ProviderService
                     $photo = $curl->request($profile->photoURL);
                     $avatar = $this->avatarManager->getAvatar($user->getUid());
                     $avatar->set($photo);
-                } catch (\Exception $e) {}
+                } catch (\Throwable $e) {}
             }
 
             if (isset($profile->data['groups']) && is_array($profile->data['groups'])) {
@@ -585,6 +575,8 @@ class ProviderService
             'password' => $userPassword,
             'token' => $userPassword ? null : $token,
         ], false);
+
+        $user->updateLastLoginTimestamp();
 
         //Workaround to create user files folder. Remove it later.
         \OC::$server->get(\OCP\Files\IRootFolder::class)->getUserFolder($user->getUID());
